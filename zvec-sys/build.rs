@@ -110,9 +110,13 @@ fn main() {
     // near the resolved library so the high-level crate can auto-register the
     // default jieba dict dir for the `jieba` FTS tokenizer.
     if let Some(ref dir) = lib_dir {
-        if let Some(jieba_dir) =
-            resolve_jieba_dict_dir(&sibling_zvec, &submodule_zvec, &auto_build_dir, dir)
-        {
+        if let Some(jieba_dir) = resolve_jieba_dict_dir(
+            &sibling_zvec,
+            &submodule_zvec,
+            &auto_build_dir,
+            dir,
+            strict_lib_dir_required(),
+        ) {
             println!(
                 "cargo:rustc-env=ZVEC_RUST_JIEBA_DICT_DIR={}",
                 jieba_dir.display()
@@ -218,7 +222,7 @@ fn strict_lib_dir_required() -> bool {
 /// library.
 fn strict_lib_failure_message(configured: Option<PathBuf>) -> String {
     let target = env::var("TARGET").unwrap_or_default();
-    let expected = expected_lib_file_names().join(", ");
+    let expected = describe_expected_lib_file_names();
     let no_fallback = "A strict build never falls back to a sibling zvec/ checkout, the \
                        submodule, the vendor directory, a cached or downloaded prebuilt SDK, or \
                        a source build.";
@@ -292,6 +296,16 @@ fn expected_lib_file_names() -> &'static [&'static str] {
             }
         }
         _ => &["libzvec_c_api.so"],
+    }
+}
+
+/// The expected library names as a phrase the linker's rule matches: one name
+/// where the platform accepts one artifact, and "one of a, b, c" where it
+/// accepts several, so the message cannot read as if all of them are required.
+fn describe_expected_lib_file_names() -> String {
+    match expected_lib_file_names() {
+        [only] => (*only).to_owned(),
+        several => format!("one of {}", several.join(", ")),
     }
 }
 
@@ -720,25 +734,34 @@ fn num_cpus() -> String {
 ///      (`<prefix>/lib` + `<prefix>/data`, as produced by zvec's CMake install).
 ///   3. The `thirdparty/cppjieba` dict of a sibling / submodule / auto-built
 ///      zvec source checkout.
+///
+/// A strict build stops after the first two. A dictionary taken from a sibling
+/// checkout or the submodule belongs to a different copy of the SDK than the
+/// configured library, which is the substitution strict mode exists to refuse;
+/// the dictionary is part of the SDK's own layout, so the configured directory
+/// has to provide it the same way it provides the library.
 fn resolve_jieba_dict_dir(
     sibling_zvec: &Option<PathBuf>,
     submodule_zvec: &Path,
     auto_build_dir: &Path,
     lib_dir: &Path,
+    strict: bool,
 ) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = vec![
         lib_dir.join("data").join("jieba_dict"),
         lib_dir.join("..").join("data").join("jieba_dict"),
     ];
-    let dict_suffix = Path::new("thirdparty")
-        .join("cppjieba")
-        .join("cppjieba-5.6.7")
-        .join("dict");
-    if let Some(ref sibling) = sibling_zvec {
-        candidates.push(sibling.join(&dict_suffix));
+    if !strict {
+        let dict_suffix = Path::new("thirdparty")
+            .join("cppjieba")
+            .join("cppjieba-5.6.7")
+            .join("dict");
+        if let Some(sibling) = sibling_zvec {
+            candidates.push(sibling.join(&dict_suffix));
+        }
+        candidates.push(submodule_zvec.join(&dict_suffix));
+        candidates.push(auto_build_dir.join("zvec").join(&dict_suffix));
     }
-    candidates.push(submodule_zvec.join(&dict_suffix));
-    candidates.push(auto_build_dir.join("zvec").join(&dict_suffix));
 
     candidates.into_iter().find(|c| has_jieba_dict(c))
 }

@@ -441,6 +441,91 @@ mod build_script {
         }
 
         #[test]
+        fn strict_is_enabled_by_one_or_the_word_true_however_it_is_cased() {
+            // Held for its environment isolation and restored on drop; the
+            // assertions below read process environment, not fixture state.
+            let _fixture = Fixture::new();
+
+            for value in ["1", "true", "TRUE", "True"] {
+                env::set_var("ZVEC_STRICT_LIB", value);
+                assert!(
+                    strict_lib_dir_required(),
+                    "value {value:?} must enable strict mode"
+                );
+            }
+            // Values that read as "yes" in some other toolchains stay off, so the
+            // word this contract accepts is exactly `true`.
+            for value in ["yes", "on", "2", " true"] {
+                env::set_var("ZVEC_STRICT_LIB", value);
+                assert!(
+                    !strict_lib_dir_required(),
+                    "value {value:?} must not enable strict mode"
+                );
+            }
+        }
+
+        #[test]
+        fn strict_mode_keeps_the_jieba_dict_inside_the_configured_directory() {
+            let fixture = Fixture::new();
+            let explicit = fixture.install_explicit_library();
+
+            // A dictionary in the sibling checkout, which non-strict resolution
+            // takes.
+            let dict_suffix = Path::new("thirdparty")
+                .join("cppjieba")
+                .join("cppjieba-5.6.7")
+                .join("dict");
+            let sibling_dict = fixture.root.join("zvec").join(&dict_suffix);
+            fs::create_dir_all(&sibling_dict).unwrap();
+            fs::write(sibling_dict.join("jieba.dict.utf8"), "dict").unwrap();
+            fs::write(sibling_dict.join("hmm_model.utf8"), "model").unwrap();
+
+            let sibling = Some(fixture.root.join("zvec"));
+            let submodule = fixture.root.join("submodule");
+            let auto_build = fixture.root.join("auto-build");
+
+            // Non-strict: the sibling dictionary is used. Strict mode has to
+            // refuse exactly this, because that dictionary belongs to a different
+            // copy of the SDK than the configured library.
+            assert_eq!(
+                resolve_jieba_dict_dir(&sibling, &submodule, &auto_build, &explicit, false),
+                Some(sibling_dict)
+            );
+            // Strict: only the configured directory may supply it, and this one
+            // does not, so the crate registers no dictionary rather than one from
+            // another copy.
+            assert_eq!(
+                resolve_jieba_dict_dir(&sibling, &submodule, &auto_build, &explicit, true),
+                None
+            );
+        }
+
+        #[test]
+        fn the_expected_names_read_as_one_of_where_several_are_valid() {
+            // Held for its environment isolation and restored on drop.
+            let _fixture = Fixture::new();
+
+            env::set_var("CARGO_CFG_TARGET_OS", "linux");
+            assert_eq!(describe_expected_lib_file_names(), "libzvec_c_api.so");
+
+            env::set_var("CARGO_CFG_TARGET_OS", "windows");
+            env::set_var("CARGO_CFG_TARGET_ENV", "gnu");
+            assert_eq!(
+                describe_expected_lib_file_names(),
+                "one of libzvec_c_api.dll.a, zvec_c_api.lib, zvec_c_api.dll"
+            );
+            let message = strict_lib_failure_message(None);
+            assert!(
+                message.contains("one of libzvec_c_api.dll.a, zvec_c_api.lib, zvec_c_api.dll"),
+                "the message must not read as if every name were required: {message}"
+            );
+
+            // MSVC accepts exactly one artifact, so it reads as a plain name.
+            env::set_var("CARGO_CFG_TARGET_ENV", "msvc");
+            assert_eq!(describe_expected_lib_file_names(), "zvec_c_api.lib");
+        }
+
+        #[test]
         fn strict_mode_never_reaches_acquisition() {
             let fixture = Fixture::new();
             env::set_var("ZVEC_STRICT_LIB", "1");
