@@ -45,12 +45,50 @@ fn insert_one_doc(collection: &Collection) {
     collection.flush().expect("failed to flush");
 }
 
+/// Control for the reopen assertions: the engine refuses a second handle while
+/// the first is live.
+///
+/// Without this, "reopening succeeds" would be no evidence at all — it would
+/// hold just as well if the engine allowed two handles on one path and nothing
+/// had been released. Observed refusal text on the pinned engine:
+/// `Can't lock read-write collection: <path>/LOCK`.
+#[test]
+fn a_live_handle_blocks_a_second_open() {
+    ensure_initialized();
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let (collection, path) = create_test_collection(tmp_dir.path());
+    insert_one_doc(&collection);
+
+    // `Collection` is not `Debug`, so the refusal is matched rather than unwrapped.
+    let blocked = match Collection::open(&path, None) {
+        Ok(_) => panic!("a second handle on a live collection must be refused"),
+        Err(error) => error,
+    };
+    assert_eq!(blocked.code, ErrorCode::InternalError);
+    assert!(
+        !blocked.message.is_empty(),
+        "the refusal must carry the engine's reason"
+    );
+
+    // And the path is openable again only once the live handle is gone.
+    collection.try_close().expect("try_close must succeed");
+    Collection::open(&path, None).expect("reopen after try_close");
+}
+
 /// `try_close` releases the native handle.
 ///
-/// The release is observable from the outside: once the handle is gone, the
-/// collection can be opened again and still holds its documents. Reopening also
-/// proves that the `Drop` that follows `try_close` did not close a handle it no
-/// longer owns.
+/// The release is observable from the outside — but only because of the control
+/// in [`a_live_handle_blocks_a_second_open`]: a live handle blocks a second open
+/// on the same path, so a successful reopen after `try_close` means this handle
+/// was released, and the documents are still there.
+///
+/// It does not prove that the `Drop` following `try_close` skipped its close.
+/// Removing the handle swap would make that `Drop` release an already-released
+/// pointer, which is undefined behaviour: the process may corrupt memory and
+/// still report success here. That property stays structural — one call site,
+/// the swap, and the null check in `Drop` — and observing a regression needs a
+/// sanitizer build rather than an assertion in this test.
 #[test]
 fn try_close_releases_the_handle() {
     ensure_initialized();
@@ -96,4 +134,10 @@ fn try_close_reports_the_native_error_code() {
         .expect_err("a null handle must not be reported as success");
 
     assert_eq!(error.code, ErrorCode::InvalidArgument);
+    // `check_error` falls back to "unknown error" when the C library stored no
+    // message, so the fallback is exactly what a broken message path produces.
+    assert!(
+        !error.message.is_empty() && error.message != "unknown error",
+        "the caller must receive the message the C library stored: {error:?}"
+    );
 }
