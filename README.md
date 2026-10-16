@@ -132,13 +132,21 @@ Set `ZVEC_AUTO_BUILD=0` to disable steps 5 and 6.
 Prebuilt SDKs remain cached at `$OUT_DIR/zvec-prebuilt`, under Cargo's `target`
 directory. Cleaning the corresponding build output removes this cache.
 Cache reuse requires successful extraction, the expected native library, and a
-completion marker; unmarked cache entries are downloaded again.
+completion marker; an unmarked cache entry is downloaded again and replaced only
+after the new download is verified, so a failed download never destroys the copy
+you already have.
 
 Failed curl downloads fall back to wget, then PowerShell on Windows. Command
 failures report their exit status and diagnostics. Archives that fail extraction
 or lack the expected library are retained at the printed path until the next
-download attempt or clean. If all acquisition methods fail, the build script
-stops with an explicit error instead of deferring the failure to the linker.
+download attempt or clean.
+
+If acquisition is enabled and every method fails, the build script stops with an
+explicit error instead of deferring the failure to the linker. Acquisition is
+enabled by the `bundled` feature unless `ZVEC_AUTO_BUILD=0` is set. When it is
+disabled the build script only warns, so `cargo check`, `cargo doc` and
+`cargo publish` keep working for setups that provide the library themselves,
+such as a system `libzvec_c_api` reached through `ZVEC_LIB_DIR` or `RUSTFLAGS`.
 
 ## Quick Start
 

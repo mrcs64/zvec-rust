@@ -24,6 +24,7 @@ mod build_script {
             "ZVEC_LIB_DIR",
             "ZVEC_INCLUDE_DIR",
             "ZVEC_AUTO_BUILD",
+            "ZVEC_REPO_URL",
             "DOCS_RS",
             "ZVEC_TEST_LOG",
         ];
@@ -156,7 +157,7 @@ mod build_script {
         }
 
         #[test]
-        fn unmarked_partial_cache_is_discarded_before_redownload() {
+        fn unmarked_partial_cache_is_replaced_by_a_verified_download() {
             let fixture = Fixture::new();
             fixture.successful_download("curl", "-o");
             fixture.successful_extraction();
@@ -174,6 +175,29 @@ mod build_script {
             );
             assert_eq!(fixture.log(), "curl\ntar\n");
             assert_eq!(fixture.cache_entries(), vec![cache_dir]);
+        }
+
+        #[test]
+        fn failed_download_preserves_an_existing_cache() {
+            let fixture = Fixture::new();
+            fixture.tool("curl", "printf 'curl\\n' >> \"$ZVEC_TEST_LOG\"\nexit 28");
+            fixture.tool("wget", "printf 'wget\\n' >> \"$ZVEC_TEST_LOG\"\nexit 4");
+            let cache_dir = fixture.cache_dir();
+            fs::create_dir_all(&cache_dir).unwrap();
+            fs::write(cache_dir.join("libzvec_c_api.so"), "legacy library").unwrap();
+            assert!(has_zvec_lib(&cache_dir));
+            assert!(!has_complete_prebuilt(&cache_dir));
+
+            assert!(download_prebuilt(&cache_dir).is_none());
+            // A cache written before completion markers existed is not reused,
+            // but a failed download must not delete it either: it may be the
+            // only copy of the SDK available offline.
+            assert_eq!(
+                fs::read_to_string(cache_dir.join("libzvec_c_api.so")).unwrap(),
+                "legacy library"
+            );
+            assert_eq!(fixture.cache_entries(), vec![cache_dir]);
+            assert_eq!(fixture.log(), "curl\nwget\n");
         }
 
         #[test]
@@ -232,13 +256,35 @@ mod build_script {
         }
 
         #[test]
-        fn missing_library_fails_in_the_build_script() {
-            let _fixture = Fixture::new();
-            let error = std::panic::catch_unwind(main).unwrap_err();
-            assert!(error
-                .downcast_ref::<String>()
-                .unwrap()
-                .contains("Could not find libzvec_c_api"));
+        fn failed_acquisition_fails_in_the_build_script() {
+            let fixture = Fixture::new();
+            // Request acquisition, but no download tool is on PATH and the
+            // clone URL is a local path, so nothing reaches the network.
+            env::set_var("ZVEC_AUTO_BUILD", "1");
+            env::set_var("ZVEC_REPO_URL", "/nonexistent/zvec.git");
+            if cfg!(feature = "bundled") {
+                let error = std::panic::catch_unwind(main).unwrap_err();
+                assert!(error
+                    .downcast_ref::<String>()
+                    .unwrap()
+                    .contains("every acquisition method failed"));
+            } else {
+                // Without the feature nothing can be acquired, so the script
+                // warns and leaves the failure to the linker.
+                main();
+            }
+            assert!(fixture.log().is_empty());
+        }
+
+        #[test]
+        fn disabled_acquisition_only_warns_in_the_build_script() {
+            let fixture = Fixture::new();
+            // `ZVEC_AUTO_BUILD=0` keeps the build hermetic: `cargo check`,
+            // `cargo doc` and `cargo publish` verification do not link, so a
+            // library the caller provides itself must not fail the script.
+            main();
+            assert!(fixture.log().is_empty());
+            assert!(!fixture.cache_dir().exists());
         }
 
         #[test]
