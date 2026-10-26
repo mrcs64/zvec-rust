@@ -465,42 +465,6 @@ mod build_script {
         }
 
         #[test]
-        fn strict_mode_keeps_the_jieba_dict_inside_the_configured_directory() {
-            let fixture = Fixture::new();
-            let explicit = fixture.install_explicit_library();
-
-            // A dictionary in the sibling checkout, which non-strict resolution
-            // takes.
-            let dict_suffix = Path::new("thirdparty")
-                .join("cppjieba")
-                .join("cppjieba-5.6.7")
-                .join("dict");
-            let sibling_dict = fixture.root.join("zvec").join(&dict_suffix);
-            fs::create_dir_all(&sibling_dict).unwrap();
-            fs::write(sibling_dict.join("jieba.dict.utf8"), "dict").unwrap();
-            fs::write(sibling_dict.join("hmm_model.utf8"), "model").unwrap();
-
-            let sibling = Some(fixture.root.join("zvec"));
-            let submodule = fixture.root.join("submodule");
-            let auto_build = fixture.root.join("auto-build");
-
-            // Non-strict: the sibling dictionary is used. Strict mode has to
-            // refuse exactly this, because that dictionary belongs to a different
-            // copy of the SDK than the configured library.
-            assert_eq!(
-                resolve_jieba_dict_dir(&sibling, &submodule, &auto_build, &explicit, false),
-                Some(sibling_dict)
-            );
-            // Strict: only the configured directory may supply it, and this one
-            // does not, so the crate registers no dictionary rather than one from
-            // another copy.
-            assert_eq!(
-                resolve_jieba_dict_dir(&sibling, &submodule, &auto_build, &explicit, true),
-                None
-            );
-        }
-
-        #[test]
         fn the_expected_names_read_as_one_of_where_several_are_valid() {
             // Held for its environment isolation and restored on drop.
             let _fixture = Fixture::new();

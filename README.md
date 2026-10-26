@@ -16,7 +16,7 @@ Safe, idiomatic Rust bindings for the [zvec](https://github.com/alibaba/zvec) ve
 - **Comprehensive Error Handling** — All FFI calls return `Result<T>` with detailed error codes
 - **Zero-Copy Where Possible** — Minimizes data copying across the FFI boundary
 - **Prebuilt Libraries** — Automatically downloads prebuilt `libzvec_c_api` from GitHub Releases; advanced users can override with `ZVEC_LIB_DIR`
-- **FTS with jieba Out of the Box** — Prebuilt packages ship the cppjieba dictionary (`data/jieba_dict`); `initialize` auto-discovers it and registers the default jieba dict dir for the `jieba` FTS tokenizer
+- **FTS with jieba Out of the Box** — `libzvec_c_api` embeds cppjieba's default dictionary and HMM model (LZ4-compressed), so the `jieba` FTS tokenizer needs no dictionary files on disk and no registration step
 
 ## Supported Platforms
 
@@ -68,7 +68,7 @@ Add `zvec-rust` to your `Cargo.toml`. The default `bundled` feature automaticall
 
 ```toml
 [dependencies]
-zvec-rust = "0.7.2"
+zvec-rust = "0.8.0"
 ```
 
 `cargo run` / `cargo test` work out of the box because Cargo passes the
@@ -81,10 +81,10 @@ the executable:
 
 ```toml
 [dependencies]
-zvec-rust = "0.7.2"
+zvec-rust = "0.8.0"
 
 [build-dependencies]
-zvec-rust-build = "0.7.2"
+zvec-rust-build = "0.8.0"
 ```
 
 ```rust
@@ -147,11 +147,6 @@ configured `ZVEC_LIB_DIR` and disables every substitute:
 3. A missing, invalid or incomplete `ZVEC_LIB_DIR` fails the build script with
    the expected file name and target instead of falling back to another copy.
 
-The cppjieba dictionary the `jieba` FTS tokenizer needs follows the library: in
-strict mode it must come from the configured directory (`data/jieba_dict` next to
-the library, or `<prefix>/data/jieba_dict`), never from a sibling checkout or the
-submodule, because that dictionary belongs to a different copy of the SDK.
-
 Use it when a build must link exactly the library the environment provides —
 reproducible packaging, auditing, or offline builds — and a silent fallback to a
 different copy would be a defect. Because the failure is raised when the build
@@ -165,7 +160,7 @@ toolchains accept — keeps the resolution order and behavior above unchanged.
 `DOCS_RS` builds still skip native library resolution entirely, because they do
 not link.
 
-Strict mode constrains the library and its dictionary, not the include path:
+Strict mode constrains the library, not the include path:
 `ZVEC_INCLUDE_DIR` resolution is unchanged, so a strict build can still take its
 headers from a sibling checkout or the submodule. That decides what downstream
 build scripts see rather than what the linker uses, which is why it is not part
@@ -289,8 +284,6 @@ cargo run --example vector_search
 | `shutdown()` | Release all resources |
 | `version()` | Get version string |
 | `is_initialized()` | Check initialization status |
-| `set_default_jieba_dict_dir(dir)` | Set the process-wide default jieba dict dir for the FTS `jieba` tokenizer |
-| `get_default_jieba_dict_dir()` | Get the current default jieba dict dir (`""` when unset) |
 | `io_backend_type()` / `io_backend_type_name(code)` | Active DiskAnn I/O backend code and name (`io_uring`, `libaio`, `pread`, `windows_overlapped`) |
 | `io_backend_description()` | Human-readable description of the active I/O backend |
 
@@ -307,14 +300,13 @@ initialize(Some(&config))?;
 
 #### jieba FTS tokenizer dictionary
 
-The `jieba` FTS tokenizer needs cppjieba's dictionary files (`jieba.dict.utf8`
-and `hmm_model.utf8`). The prebuilt libraries ship them under `data/jieba_dict`
-next to `libzvec_c_api`, and `initialize` automatically discovers that
-directory and registers it via `zvec_set_default_jieba_dict_dir` — Chinese
-full-text search works with no extra configuration:
+`libzvec_c_api` embeds cppjieba's default dictionary and HMM model
+(LZ4-compressed), so the `jieba` FTS tokenizer reads them from the library
+itself — Chinese full-text search works with no dictionary files on disk and
+no extra configuration:
 
 ```rust
-initialize(None)?; // jieba dict auto-discovered and registered
+initialize(None)?;
 
 let schema = CollectionSchema::builder("articles")
     .add_field(FieldSchema::new("id", DataType::String, false, 0)?)
@@ -323,12 +315,15 @@ let schema = CollectionSchema::builder("articles")
     .build()?;
 ```
 
-To override the location (e.g. a custom dictionary), use one of:
+To use a custom dictionary instead of the embedded default, set one of the
+following (highest priority first); the directory must contain
+`jieba.dict.utf8` and `hmm_model.utf8`:
 
-- `ConfigBuilder::new().jieba_dict_dir("/path/to/jieba_dict")` — per `initialize` call (highest priority)
-- `set_default_jieba_dict_dir("/path/to/jieba_dict")` — process-wide default
-- `ZVEC_JIEBA_DICT_DIR` environment variable — read by the zvec library at query time
 - per-field `extra_params` JSON with `"jieba_dict_dir"` — per index
+- `ZVEC_JIEBA_DICT_DIR` environment variable — process-wide, read when the tokenizer initializes
+
+The `user_dict_path` extra param adds entries on top of whichever dictionary
+was selected, including the embedded default.
 
 ### Schema Definition
 
